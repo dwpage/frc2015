@@ -17,6 +17,7 @@ import edu.wpi.first.wpilibj.buttons.Button;
 import edu.wpi.first.wpilibj.buttons.JoystickButton;
 import edu.wpi.first.wpilibj.interfaces.Accelerometer;
 import edu.wpi.first.wpilibj.internal.HardwareTimer;
+import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 
 /**
  * This is a demo program showing the use of the RobotDrive class.
@@ -36,23 +37,16 @@ import edu.wpi.first.wpilibj.internal.HardwareTimer;
  */
 public class Robot extends SampleRobot {
     RobotDrive myRobot;
-    Joystick driver;
-    Joystick smo; 
+    Joystick driver,smo; 
     Compressor compressor;
-    DoubleSolenoid platformLifter1;
-    DoubleSolenoid platformLifter2;
+    DoubleSolenoid platformLifter1, platformLifter2;
+    Solenoid ejectorPiston;
     SpeedController funnelConveyor; 
     Accelerometer internalAcceleromoter ;
-    Button halfSpeed;
-    Button compressorOn;
-    Button compressorOff;
-    Button conveyorTrigger;
-    Button platformUp;
+    Button halfSpeed,compressorOn,compressorOff,ejectorTrigger,platformUp,platformDown;
     
-    DigitalInput funnelSensor;
-    DigitalInput platformBottomLimit;
-    DigitalInput platformTopLimit;
-
+    DigitalInput funnelSensor,platformBottomLimit,platformTopLimit,hasToteLoaded;
+    Timer.Interface ejectorTimer;
     public Robot() {
         //Motors
     	myRobot = new RobotDrive(0,1,2,3);
@@ -63,6 +57,7 @@ public class Robot extends SampleRobot {
         compressor.start();
         platformLifter1 = new DoubleSolenoid(1,2);
         platformLifter2 = new DoubleSolenoid(3,4);
+        ejectorPiston = new Solenoid(5);
         
         myRobot.setExpiration(0.1);
         
@@ -72,15 +67,24 @@ public class Robot extends SampleRobot {
       
         // Probably an enum for this
         halfSpeed = new JoystickButton(driver, 1);
+        ejectorTrigger = new JoystickButton(smo,1);
+        platformUp = new JoystickButton(smo, 3);
+        platformDown = new JoystickButton(smo, 4);
         compressorOn = new JoystickButton(smo,5);
         compressorOff = new JoystickButton(smo, 6);
-        platformUp = new JoystickButton(smo, 1);
+        
+        
         
         //sensors
         internalAcceleromoter = new BuiltInAccelerometer();
+        hasToteLoaded = new DigitalInput(1);
         funnelSensor = new DigitalInput(2);
         platformBottomLimit = new DigitalInput(3);
         platformTopLimit = new DigitalInput(4);
+        
+        
+        //other
+        ejectorTimer = new HardwareTimer().newTimer();
     }
 
     /**
@@ -98,48 +102,84 @@ public class Robot extends SampleRobot {
      */
     public void operatorControl() {
         myRobot.setSafetyEnabled(true);
-        Timer.Interface liftTimer = new HardwareTimer().newTimer();
+       
         
         while (isOperatorControl() && isEnabled()) {
         	
-        	if(halfSpeed.get())
-        	{
-        		myRobot.mecanumDrive_Cartesian(driver.getX()/2, driver.getY()/2.0, driver.getZ()/2.0, 0);		
-        	}
-        	else
-        	{
-        		myRobot.mecanumDrive_Cartesian(driver.getX(), driver.getY(), driver.getZ(), 0);	
-        	}
-            
-        	if (compressorOn.get())
-        	{
-        		compressor.start();
-        	}
-        	if (compressorOff.get())
-        	{
-        		compressor.stop();
-        	}
-        	//trigger pulled to lift
-        	if (platformUp.get())
-        	{
-        		platformLifter1.set(DoubleSolenoid.Value.kForward);
-        		platformLifter2.set(DoubleSolenoid.Value.kForward);
-        		liftTimer.reset();
-        		liftTimer.start();
-        	}
-        	//Once they let go, make sure it has a full second to extend, then retract. Excepting a catch to hold tote now.
-        	else if (liftTimer.hasPeriodPassed(1000))
-        	{
-        		liftTimer.stop();
-        		platformLifter1.set(DoubleSolenoid.Value.kReverse);
-        		platformLifter2.set(DoubleSolenoid.Value.kReverse);
-        	}
-        	
-            
+        	manageDrive();
+        	manageCompressor();
+            managePlatform();
+            manageEjector();
             Timer.delay(0.005);		// wait for a motor update time
         }
     }
+    public void manageEjector()
+    {
+    	if (ejectorTrigger.get() && (hasToteLoaded.get()||toteLoadedSensorOverride() ))
+    	{
+    		ejectorPiston.set(true);
+    		ejectorTimer.reset();
+    		ejectorTimer.start();
+    	}
+    	if (ejectorTimer.get()>2000)
+    	{
+    		ejectorTimer.stop();
+    		ejectorPiston.set(false);
+    	}
+    }
+    public void manageCompressor()
+    {
+    	if (compressorOn.get())
+    	{
+    		compressor.start();
+    	}
+    	if (compressorOff.get())
+    	{
+    		compressor.stop();
+    	}
+    }
+    public void manageDrive()
+    {
+    	if(halfSpeed.get())
+    	{
+    		myRobot.mecanumDrive_Cartesian(driver.getX()/2.0d, driver.getY()/2.0d, driver.getZ()/2.0d, 0);
+    	}
+    	else
+    	{
+    		myRobot.mecanumDrive_Cartesian(driver.getX(), driver.getY(), driver.getZ(), 0);	
+    	}
+    }
+    public void managePlatform()
+    {
+    	//trigger pulled to lift
+    	if (platformUp.get())
+    	{
+    		platformLifter1.set(DoubleSolenoid.Value.kForward);
+    		platformLifter2.set(DoubleSolenoid.Value.kForward);
+    	}
+    	else if (platformDown.get())
+    	{
+    		platformLifter1.set(DoubleSolenoid.Value.kReverse);
+    		platformLifter2.set(DoubleSolenoid.Value.kReverse);
+    	}
 
+    }
+    public static double safeMotorSet(double desired_speed, boolean ls_reverse, boolean ls_forward)
+    {
+    	if( (desired_speed>0 && !ls_forward) || (desired_speed <0 && !ls_reverse))
+    	{
+    		return desired_speed;
+    	}
+    	else
+    	{
+    		return 0;
+    	}
+    }
+    public boolean toteLoadedSensorOverride()
+    {
+    	
+    	return SmartDashboard.getBoolean("toteoverride"); 
+    }
     /**
      * Runs during test mode
      */
